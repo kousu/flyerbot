@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools>=61", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "flyerbot"
+version = "0.1.0"
+description = "XMPP bot that OCRs flyer images and returns .ics files"
+requires-python = ">=3.14"
+dependencies = [
+    "cryptography~=46.0.5",
+    "filetype~=1.2.0",
+    "aiohttp~=3.13.3",
+    "pyxdg~=0.28.0",
+    "icsmtl @ git+https://github.com/kousu/icsmtl.git@direct-ai",
+    "slixmpp-omemo>=2.1.0",
+    "slixmpp>=1.12.0",
+]
+
+# TODO: experiment with uv. Is it a good fit?
+#[tool.uv.sources]
+#icsmtl = { editable=true, path="../../icsmtl" }
+#icsmtl = { git = "https://github.com/kousu/icsmtl.git", branch = "direct-ai" }
+
+[project.scripts]
+flyerbot = "kousu.flyerbot.__main__:main"

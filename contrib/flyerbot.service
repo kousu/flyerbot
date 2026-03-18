@@ -1,0 +1,14 @@
+[Unit]
+Description=flyer reading bot
+
+[Service]
+ExecStart=/usr/local/bin/flyerbot -vv
+EnvironmentFile=/var/lib/flyerbot/.config/flyerbot/credentials.sh
+User=flyerbot
+Group=flyerbot
+Restart=on-failure
+StartLimitInterval=5min
+StartLimitBurst=4
+
+[Install]
+WantedBy=default.target
