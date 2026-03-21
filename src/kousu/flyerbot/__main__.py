@@ -8,7 +8,7 @@ from .bot import FlyerBot
 log = logging.getLogger(__name__)
 
 logging.basicConfig(
-    level=logging.INFO, # bots are backend, so info is a good default level
+    level=logging.INFO,  # bots are backend, so info is a good default level
     format="%(asctime)s %(levelname)-6s %(name)+25s:%(lineno)d: %(message)s",
     datefmt="%Y-%m-%dT%H:%M:%S",
 )
@@ -72,10 +72,12 @@ async def amain():
         bot["socket"].connect_to_host = (args.host, args.port)
 
     failed_auth = False
+
     def on_failed_auth(event):
         nonlocal failed_auth
         failed_auth = True
-    bot.add_event_handler('failed_all_auth', failed_auth)
+
+    bot.add_event_handler("failed_all_auth", failed_auth)
 
     # Run the bot
     log.info(f"Connecting to XMPP as {args.jid}...")
@@ -83,7 +85,7 @@ async def amain():
 
     try:
         # limit how long the bot gets to try to connect for
-        await bot.wait_until('connected', timeout=60)
+        await bot.wait_until("connected", timeout=60)
 
         # *if* connected, block until the but shuts down
         await bot.disconnected

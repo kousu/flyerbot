@@ -26,10 +26,10 @@ log = logging.getLogger(__name__)
 
 class XEP_0402(slixmpp.plugins.xep_0402.XEP_0402):
     """
-        The XEP_0402 plugin expanded to actually have an API to
-        and to respect autojoin (like XEP_0048 does).
-        Also, listens for autojoin changes and syncs its state,
-        if allowed by the user.
+    The XEP_0402 plugin expanded to actually have an API to
+    and to respect autojoin (like XEP_0048 does).
+    Also, listens for autojoin changes and syncs its state,
+    if allowed by the user.
     """
 
     name = "xep_0402"

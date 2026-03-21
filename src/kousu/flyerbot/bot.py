@@ -32,6 +32,10 @@ log = logging.getLogger(__name__)
 # - [ ] add a 'check your Claude balance' command (not supported directly by the Claude API but there is a billing history API so you can guess)
 
 
+class NotImageError(Exception):
+    pass
+
+
 class FlyerBot(slixmpp.ClientXMPP):
     """
     XMPP bot that receives flyer images, OCRs them, and returns .ics files.
@@ -227,6 +231,10 @@ class FlyerBot(slixmpp.ClientXMPP):
                 # END here to cut short hammering on an overworked box
                 # (and avoid repeating the error to the user)
                 break
+            except kousu.flyerocr.NotImageError:
+                if msg["type"] != "groupchat":
+                    # don't be noisy in groups about irrelevant details
+                    reply["body"] = "Not an image."
             except kousu.flyerocr.NotEventError:
                 if msg["type"] != "groupchat":
                     # don't be noisy in groups about irrelevant details
@@ -236,7 +244,9 @@ class FlyerBot(slixmpp.ClientXMPP):
 
                 _cause = exc.__cause__
                 while _cause:
-                    reply["body"] += f": {type(_cause).__name__}" + (f": {_cause}" if str(_cause) else "")
+                    reply["body"] += f": {type(_cause).__name__}" + (
+                        f": {_cause}" if str(_cause) else ""
+                    )
                     _cause = _cause.__cause__
 
                 log.error("Image %s caused:\n%s", url, traceback.format_exc())
@@ -274,7 +284,7 @@ class FlyerBot(slixmpp.ClientXMPP):
 
         format = filetype.guess(image_data)
         if not format or not format.mime.startswith("image/"):
-            raise TypeError("Not an image")
+            raise NotImageError("Not an image")
 
         ## Processing
         #
@@ -317,7 +327,9 @@ class FlyerBot(slixmpp.ClientXMPP):
                 resp.raise_for_status()
                 image_data = await resp.read()
         if encryption_key:
-            image_data = self["xep_0454"].decrypt(io.BytesIO(image_data), encryption_key)
+            image_data = self["xep_0454"].decrypt(
+                io.BytesIO(image_data), encryption_key
+            )
 
         return image_data
 
