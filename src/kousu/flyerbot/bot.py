@@ -82,9 +82,9 @@ class FlyerBot(slixmpp.ClientXMPP):
         self.register_plugin("xep_0454")
 
         # FAST (SASL FAST authentication)
-        self.register_plugin(
-            "xep_0484", {"storage": os.path.join(state, "fast-token.json")}
-        )
+        # self.register_plugin(
+        # "xep_0484", {"storage": os.path.join(state, "fast-token.json")}
+        # )
 
         # Event handlers
         #
