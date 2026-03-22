@@ -71,37 +71,33 @@ async def amain():
     if args.host:
         bot["socket"].connect_to_host = (args.host, args.port)
 
-    failed_auth = False
-
-    def on_failed_auth(event):
-        nonlocal failed_auth
-        failed_auth = True
-
-    bot.add_event_handler("failed_all_auth", failed_auth)
-
     # Run the bot
     log.info(f"Connecting to XMPP as {args.jid}...")
     bot.connect()
 
     try:
-        # limit how long the bot gets to try to connect for
-        await bot.wait_until("connected", timeout=60)
+        bot.connect()
+        login = asyncio.create_task(bot.wait_until("session_start", timeout=30))
 
-        # *if* connected, block until the but shuts down
+        async def connection_failed(event):
+           print(f"Unable to connect to {bot.boundjid.bare}'s server.")
+           login.cancel()
+        async def failed_auth(event):
+           print(f"Unable to login as '{bot.boundjid.bare}'. Check your password.", flush=True)
+           login.cancel()
+
+        bot.add_event_handler('connection_failed', connection_failed)
+        bot.add_event_handler('failed_all_auth', failed_auth)
+
+        await login
+        print(f"Logged in as '{bot.boundjid.bare}'")
+
+        # *once* connected, block until the but shuts down
         await bot.disconnected
-
-        if failed_auth:
-            log.error("Could not authenticate to the server.")
-            raise SystemExit(1)
-
-        # The reason for doing this in two steps
-        # is so we can :w
-        #
-        # is that the bot signals disconnected
     except TimeoutError as exc:
         raise SystemExit(1) from exc
     except asyncio.exceptions.CancelledError:
-        pass
+        await bot.disconnect()
     finally:
         # cancel then wait on any lingering threads
         tasks = [t for t in asyncio.all_tasks() if t is not asyncio.current_task()]
