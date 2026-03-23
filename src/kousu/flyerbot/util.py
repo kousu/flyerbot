@@ -33,7 +33,7 @@ def reply_id(msg: Message) -> str:
         # reply_id = msg['origin_id']['id'] # usually the same as id?
         # >  For other message types [...] <origin-id> if present,
         # > or the value of the 'id' attribute on the <message> otherwise.
-        if msg["origin_id"]:
+        if msg["origin_id"]["id"]:
             reply_id = msg["origin_id"]["id"]
         else:
             reply_id = msg["id"]
