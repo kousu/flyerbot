@@ -161,12 +161,25 @@ class FlyerBot(slixmpp.ClientXMPP):
         # menu
         # - 'help' - show the instructions
         cmd = None
-        if msg["type"] in ["normal", "chat"]:
-            cmd = msg["body"].lower()
-        elif msg["type"] == "groupchat":
-            if msg["body"].lower().startswith(f"@{nickname.lower()} "):
-                cmd = msg["body"].lower().removeprefix(f"@{nickname.lower()} ")
-        cmd = cmd.strip() if cmd else None
+        cmd = msg["body"].lower().strip()
+        if msg["type"] == "groupchat":
+            # in a groupchat, only respond if mentioned
+            # this is super verbose but i don't want to use a regex because nickname is potentially attacker-controlled
+            if cmd.startswith(f"@{nickname.lower()}: "):
+                cmd = cmd[1+len(nickname)+2:]
+            elif cmd.startswith(f"@{nickname.lower()}, "):
+                cmd = cmd[1+len(nickname)+2:]
+            elif cmd.startswith(f"@{nickname.lower()} "):
+                cmd = cmd[1+len(nickname)+1:]
+            elif cmd.startswith(f"{nickname.lower()}: "):
+                cmd = cmd[len(nickname)+2:]
+            elif cmd.startswith(f"{nickname.lower()}, "):
+                cmd = cmd[len(nickname)+2:]
+            elif cmd.startswith(f"{nickname.lower()} "):
+                cmd = cmd[len(nickname)+1:]
+            else:
+                cmd = ""
+        cmd = cmd.strip()
 
         if cmd == "help":
             _msg = f"I am {nickname.title()} and I can turn photographs of event flyers into importable iCal files. "
