@@ -6,7 +6,6 @@ from urllib.parse import urlsplit, urlunsplit
 import traceback
 import logging
 
-import filetype
 import xdg.BaseDirectory
 import aiohttp
 import asyncio
@@ -30,11 +29,6 @@ log = logging.getLogger(__name__)
 # - [ ] accept base64-embedded images too?
 # - [ ] prove you can join a MUC multiple times in one process, either by making multiple ClientXMPPs or making
 # - [ ] add a 'check your Claude balance' command (not supported directly by the Claude API but there is a billing history API so you can guess)
-
-
-class NotImageError(Exception):
-    pass
-
 
 class FlyerBot(slixmpp.ClientXMPP):
     """
@@ -294,10 +288,6 @@ class FlyerBot(slixmpp.ClientXMPP):
 
         ## Input
         image_data = await self._fetch(url)
-
-        format = filetype.guess(image_data)
-        if not format or not format.mime.startswith("image/"):
-            raise NotImageError("Not an image")
 
         ## Processing
         #
