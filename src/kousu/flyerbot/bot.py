@@ -29,6 +29,7 @@ log = logging.getLogger(__name__)
 # - [ ] accept base64-embedded OOB images too?
 # - [ ] add a 'check your Claude balance' command (not supported directly by the Claude API but there is a billing history API so you can guess)
 
+
 class FlyerBot(slixmpp.ClientXMPP):
     """
     XMPP bot that receives flyer images, OCRs them, and returns .ics files.
@@ -153,23 +154,16 @@ class FlyerBot(slixmpp.ClientXMPP):
 
         # menu
         # - 'help' - show the instructions
-        cmd = None
         cmd = msg["body"].lower().strip()
         if msg["type"] == "groupchat":
             # in a groupchat, only respond if mentioned
             # this is super verbose but i don't want to use a regex because nickname is potentially attacker-controlled
-            if cmd.startswith(f"@{nickname.lower()}: "):
-                cmd = cmd[1+len(nickname)+2:]
-            elif cmd.startswith(f"@{nickname.lower()}, "):
-                cmd = cmd[1+len(nickname)+2:]
-            elif cmd.startswith(f"@{nickname.lower()} "):
-                cmd = cmd[1+len(nickname)+1:]
-            elif cmd.startswith(f"{nickname.lower()}: "):
-                cmd = cmd[len(nickname)+2:]
-            elif cmd.startswith(f"{nickname.lower()}, "):
-                cmd = cmd[len(nickname)+2:]
-            elif cmd.startswith(f"{nickname.lower()} "):
-                cmd = cmd[len(nickname)+1:]
+
+            # TODO: https://xmpp.org/extensions/inbox/explicit-mentions.html
+            # but we should always support non-explicit mentions too because most clients won't do explicit ones for years
+            mention = re.compile(rf"@?\b{re.escape(nickname.lower())}\b[:,]?\s*")
+            if mention.search(cmd):
+                cmd = mention.sub("", cmd)
             else:
                 cmd = ""
         cmd = cmd.strip()
