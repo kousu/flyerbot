@@ -104,8 +104,17 @@ class FlyerBot(slixmpp.ClientXMPP):
         if msg["type"] not in ("chat", "normal", "groupchat"):
             return
 
-        if msg["delay"]["stamp"]:
+        if msg["type"] == "groupchat" and msg["delay"]["from"] == msg["from"].bare:
             # scrollback; not a live message; ignore
+            # https://xmpp.org/extensions/xep-0045.html#enter-history
+            # > MUST be stamped with Delayed Delivery (XEP-0203) [...] the
+            # > 'from' attribute MUST be set to the JID of the room itself.
+            #
+            # This spec doesn't imply that only history can be stamped by the room
+            # itself, but it's a fair assumption because what else does a room do
+            # except relay messages and give scrollback history of messages?
+            #
+            print("skipping scrollback")
             return
 
         if (
