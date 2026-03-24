@@ -41,7 +41,12 @@ class XEP_0402(slixmpp.plugins.xep_0402.XEP_0402):
 
     default_config = {
         "autojoin": True,  # if true, our presence in rooms is synced with the autojoin flags in our bookmarks (most modern XMPP clients do this so that all clients see the same world)
-        "maxstanzas": 0,  # how many messages of scrollback history to request when autojoining rooms
+        # For these parameters, see https://slixmpp.readthedocs.io/en/latest/api/plugins/xep_0045.html#slixmpp.plugins.xep_0045.XEP_0045.join_muc_wait
+        "maxchars": None,  # If autojoin, max number of characters to return from history, if autojoining.
+        "maxstanzas": None, # If autojoin, max number of stanzas to return from history.
+        "seconds": None,  # If autojoin, fetch history until that many seconds in the past.
+        "since": None,  # If autojoin, fetch history since that timestamp.
+        "timeout": 300, # If autojoin, timeout after which a TimeoutError is raised. None means no timeout.
     }
 
     def __init__(self, *args, **kwargs):
@@ -148,7 +153,11 @@ class XEP_0402(slixmpp.plugins.xep_0402.XEP_0402):
                     muc_jid,
                     nick,
                     password=password,
+                    maxchars=self.config["maxchars"],
                     maxstanzas=self.config["maxstanzas"],
+                    seconds=self.config["seconds"],
+                    since=self.config["since"],
+                    timeout=self.config["timeout"],
                 )
             elif not autojoin and muc_jid in rooms:
                 log.info("Leaving %s as %s", muc_jid, nick)
