@@ -26,8 +26,7 @@ log = logging.getLogger(__name__)
 
 # TODO:
 # - [ ] accept jingle file transfers too? for people who don't have http_upload?
-# - [ ] accept base64-embedded images too?
-# - [ ] prove you can join a MUC multiple times in one process, either by making multiple ClientXMPPs or making
+# - [ ] accept base64-embedded OOB images too?
 # - [ ] add a 'check your Claude balance' command (not supported directly by the Claude API but there is a billing history API so you can guess)
 
 class FlyerBot(slixmpp.ClientXMPP):
