@@ -72,7 +72,7 @@ class FlyerBot(slixmpp.ClientXMPP):
         # Bookmarks (i.e. groupchat roster)
         self.register_plugin(
             "xep_0402"
-        )  # , add {'autojoin': False, 'maxhistory': 20} as a second argument to not sync bookmarks module=slixmpp_bookmarks)
+        )  # , add {'autojoin': False, 'maxstanzas': 0} as a second argument to not sync bookmarks module=slixmpp_bookmarks)
 
         # OMEMO (encrypted messaging)
         self.register_plugin("xep_0384", {"storage": os.path.join(state, "omemo")})
