@@ -155,7 +155,7 @@ class FlyerBot(slixmpp.ClientXMPP):
             self.roster[self.boundjid.bare][msg["from"]]["from"]
         )
         groupchat = msg["type"] == "groupchat" and (
-            msg["from"].bare in util.xep_0045_rooms(self, msg["to"])
+            msg["from"].bare in self["xep_0045"].get_joined_rooms(self, pfrom=msg["to"])
         )
         allowed = bool(friends or groupchat)
 

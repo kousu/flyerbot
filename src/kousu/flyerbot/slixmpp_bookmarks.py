@@ -8,21 +8,17 @@ import asyncio
 import logging
 from typing import List
 
-from slixmpp import JID
+from slixmpp import JID, Message
+from slixmpp.types import PresenceArgs
 import slixmpp.plugins.xep_0402
+from slixmpp.plugins.xep_0060.stanza.pubsub import Item, Items
+from slixmpp.plugins.xep_0402.stanza import Conference as Bookmark
 from slixmpp.exceptions import IqError
 from slixmpp.plugins.base import register_plugin
 
 from . import util
 
 log = logging.getLogger(__name__)
-
-# TODO:
-# - [ ] track a (read only) .bookmarks property, similar to xmpp["xep_0045"].rooms ?
-# - [ ] put things on Tasks
-# - [ ] support the other parameters to https://slixmpp.readthedocs.io/en/latest/api/plugins/xep_0045.html#slixmpp.plugins.xep_0045.XEP_0045.join_muc_wait as config options
-# - [ ] puppeting madness
-
 
 class XEP_0402(slixmpp.plugins.xep_0402.XEP_0402):
     """
@@ -40,6 +36,7 @@ class XEP_0402(slixmpp.plugins.xep_0402.XEP_0402):
     }
 
     default_config = {
+        "jid": None, # if None, defaults to the JID; but if not, will
         "autojoin": True,  # if true, our presence in rooms is synced with the autojoin flags in our bookmarks (most modern XMPP clients do this so that all clients see the same world)
         # For these parameters, see https://slixmpp.readthedocs.io/en/latest/api/plugins/xep_0045.html#slixmpp.plugins.xep_0045.XEP_0045.join_muc_wait
         "maxchars": None,  # If autojoin, max number of characters to return from history, if autojoining.
@@ -49,23 +46,31 @@ class XEP_0402(slixmpp.plugins.xep_0402.XEP_0402):
         "timeout": 300, # If autojoin, timeout after which a TimeoutError is raised. None means no timeout.
     }
 
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
+    bookmarks: dict[JID, Bookmark]
 
     def plugin_init(self):
+        if self.jid is None:
+            self.jid = self.xmpp.boundjid.bare
+
+        if self.jid != self.xmpp.boundjid.bare and self.xmpp.is_component:
+            log.warn(f"Tracking bookmarks of other JIDs probably only works if we are a component and they are our authorized children. Make sure that {self.jid} is on the same domain as {self.xmpp.boundjid}.")
+
         super().plugin_init()
+
         self.xmpp.add_event_handler("session_start", self._on_start)
         self.xmpp.add_event_handler("groupchat_presence", self._on_groupchat_presence)
 
+        self.bookmarks = {}
         # map_node_event adds "bookmark" + "_" + {"publish","retract"} events to the pubsub plugin
         self.xmpp["xep_0060"].map_node_event(
             slixmpp.plugins.xep_0402.stanza.NS, "bookmark"
         )
-        self.xmpp.add_event_handler("bookmark_publish", self._on_bookmark_changed)
-        self.xmpp.add_event_handler("bookmark_retract", self._on_bookmark_retracted)
+        self.xmpp.add_event_handler("bookmark_publish", self._on_bookmarks_changed)
+        self.xmpp.add_event_handler("bookmark_retract", self._on_bookmarks_retracted)
 
     def session_bind(self, jid):
         # I don't understand this incantation; copied from slixmpp/plugins/xep_0292/vcard4.py
+        # it also doesn't seem to .. exist ?
         self.xmpp["xep_0163"].register_pep(
             "bookmark", slixmpp.plugins.xep_0402.stanza.Conference
         )
@@ -75,26 +80,24 @@ class XEP_0402(slixmpp.plugins.xep_0402.XEP_0402):
         self.xmpp["xep_0030"].del_feature(feature=slixmpp.plugins.xep_0402.stanza.NS)
         self.xmpp["xep_0163"].remove_interest(slixmpp.plugins.xep_0402.stanza.NS)
 
+        for plugin in self._children.values():
+            plugin.plugin_end()
+
     async def _on_start(self, event):
-        await self._autojoin(self.xmpp.boundjid, await self.bookmarks)
+        await self._sync_bookmarks()
 
     async def _on_groupchat_presence(self, presence):
         """
-        Configure rooms we create so they are usable.
-        https://xmpp.org/extensions/xep-0045.html#createroom-general
         """
 
         if 201 in presence["muc"]["status_codes"]:
-            # code 201 = "Created" i.e. by us and we should also be the Owner
-            # https://xmpp.org/extensions/xep-0045.html#createroom-general
-            # >  If this user is allowed to create a room and the room does not yet exist,
-            # > the service MUST create the room according to some default configuration,
-            # > assign the requesting user as the initial room owner, and add the owner to
-            # > the room but not allow anyone else to enter the room (effectively "locking"
-            # > the room). The initial presence stanza received by the owner from the room
-            # > MUST include extended presence information indicating the user's status as
-            # > an owner and acknowledging that the room has been created (via status code
-            # > 201) and is awaiting configuration.
+            # Configure rooms we create so they are usable. code 201 = "Created".
+            #
+            # https://xmpp.org/extensions/xep-0045.html#createroom-general:
+            # > The initial presence stanza received by the owner from the room
+            # > MUST include extended presence information indicating the user's
+            # > status as an owner and acknowledging that the room has been
+            # > created (via status code > 201) and is awaiting configuration.
 
             # i.e. to approve and unlock the new room the bare minimum is just
             # to re-send the default config back.
@@ -104,87 +107,119 @@ class XEP_0402(slixmpp.plugins.xep_0402.XEP_0402):
             # - set persistent?
             # - set members only?
             # - what does Cheogram do on bookmarks associated with destroyed rooms?
-            await self.xmpp["xep_0045"].set_room_config(muc_jid, config=form)
+            await self.xmpp["xep_0045"].set_room_config(muc_jid, config=form, ifrom=presence['to'])
 
-    async def _on_bookmark_changed(self, msg):
-        self.xmpp.event("bookmark_changed", msg)
+        # elif any(c in presence["muc"]["status_codes"] for c in [307, ...]):
+        #   # we were kicked out of the room; schedule a rejoin
 
-        assert msg["to"] == self.xmpp.boundjid
-        await self._autojoin(msg["to"], msg["pubsub_event"]["items"])
-
-    async def _on_bookmark_retracted(self, msg):
-        self.xmpp.event("bookmark_removed", msg)
-
-        assert msg["to"] == self.xmpp.boundjid
-        await self._autojoin(msg["to"], msg["pubsub_event"]["items"])
-
-    async def _autojoin(
-        self, jid, conferences: List[slixmpp.plugins.xep_0060.stanza.Item]
-    ):
+    async def _sync_muc(self, muc_jid: JID | str):
         """
-        If autojoin is enabled in self.config, synchronize
-        the live states with the bookmarks.
+            Helper: join/leave a single MUC according to the bookmarks.
 
-        i.e. autojoin on a bookmark means you're in the room at "all" times,
-             and not autojoin means you're never in it.
+            If config["autojoin"] is off, nothing happens.
+
+            If it's on, the room is joined
+            if bookmarks["muc_jid"]["autojoin"] and left if not.
         """
         if not self.config["autojoin"]:
             return
 
-        rooms = util.xep_0045_rooms(self.xmpp, jid)
+        # get_joined_rooms() and leave_muc() both forgets to check for multi_from:
+        # which means if we want this code to work the same with non-multifrom and multi-from mode we need to do it ourself
+        jid = self.jid if self.xmpp["xep_0045"].multi_from else None
 
-        async def _t(item):
-            muc_jid = item["id"]
-            if item.name == "item":
-                nick = item["conference"]["nick"] or self.xmpp.boundjid.user
-                autojoin = item["conference"]["autojoin"]
-                password = item["conference"]["password"] or None
-            elif item.name == "retract":
-                # a bit of a hack: treat <retract>s as if they are bookmarks with autojoin="False"
+        rooms = self.xmpp["xep_0045"].get_joined_rooms(jid)
+        bookmark = self.bookmarks.get(muc_jid)
+        if bookmark is None or not bookmark["autojoin"]:
+            # leave
+            if muc_jid in rooms:
+                # TODO: it would be nice if the xep_0045 plugin didn't require us to pass the nick
+                #  since there's only one possible nick it COULD be
                 nick = JID(
-                    self.xmpp["xep_0045"].get_our_jid_in_room(JID(item["id"]))
-                ).resource  # <-- this seems like something the xep_0045 plugin could do..
-                autojoin = False
-                password = None
-
-            if autojoin and muc_jid not in rooms:
+                    self.xmpp["xep_0045"].get_our_jid_in_room(muc_jid)
+                ).resource
+                log.info("Leaving %s as %s", muc_jid, nick)
+                self.xmpp["xep_0045"].leave_muc(muc_jid, nick, pfrom=jid)
+        else:
+            # join
+            if muc_jid not in rooms:
+                nick = bookmark["nick"] or self.xmpp.boundjid.user
                 log.info("Joining %s as %s", muc_jid, nick)
                 await self.xmpp["xep_0045"].join_muc_wait(
                     muc_jid,
                     nick,
-                    password=password,
+                    password=bookmark["password"] or None,
                     maxchars=self.config["maxchars"],
                     maxstanzas=self.config["maxstanzas"],
                     seconds=self.config["seconds"],
                     since=self.config["since"],
                     timeout=self.config["timeout"],
+                    presence_options=PresenceArgs(pfrom=self.jid)
                 )
-            elif not autojoin and muc_jid in rooms:
-                log.info("Leaving %s as %s", muc_jid, nick)
-                self.xmpp["xep_0045"].leave_muc(muc_jid, nick)
 
-        for item in conferences:
-            # join/leave everything in parallel
-            asyncio.create_task(_t(item))
-            # await _t(item) # <-- serial version, for debugging
+    # I wish
+    async def _upsert_bookmarks(self, items: Items | list[Item]):
+        for item in items:
+            room = JID(item["id"])
+            # TODO: handle the conference being empty?
+            if "conference" not in item:
+                raise TypeError("<item> should have contained a <conference>")
+            self.bookmarks[room] = item["conference"]
+            asyncio.create_task(self._sync_muc(room))
 
-    @property
-    async def bookmarks(self) -> List[slixmpp.plugins.xep_0060.stanza.Item]:
+    async def _delete_bookmarks(self, items: Items | list[Item]):
+        for item in items:
+            room = JID(item["id"])
+            if room not in self.bookmarks:
+                raise ValueError(f"{room} was not in our bookmarks cache.")
+            # TODO: handle room not being in bookmarks?
+            del self.bookmarks[room]
+            asyncio.create_task(self._sync_muc(room))
+
+    async def _on_bookmarks_changed(self, msg: Message):
+        # triggered on both creations/additions
+        self.xmpp.event("bookmarks_changed", msg)
+        await self._upsert_bookmarks(msg["pubsub_event"]["items"])
+
+    async def _on_bookmarks_retracted(self, msg: Message):
+        # triggered on deletions
+        self.xmpp.event("bookmarks_removed", msg)
+        await self._delete_bookmarks(msg["pubsub_event"]["items"])
+
+    async def _sync_bookmarks(self):
         """
-        The list of current bookmarks.
+        Query the server for the current list of bookmarks and save them to the local cache.
         """
-        # TODO: cache this; use _on_bookmark_{changed,retracted} to update the cache.
         try:
             result = await self.xmpp["xep_0060"].get_items(
-                self.xmpp.boundjid.bare, slixmpp.plugins.xep_0402.stanza.NS
+                self.jid, slixmpp.plugins.xep_0402.stanza.NS
             )
-            return result["pubsub"]["items"]
+
+            await self._upsert_bookmarks(result["pubsub"]["items"])
+
+            # compute the delta; more complicated than just leaving all rooms but it minimizes network traffic
+            deletions = set(self.bookmarks) - set(JID(item["id"]) for item in result["pubsub"]["items"])
         except IqError as exc:
             if exc.condition == "item-not-found":
-                return []
+                # there are no bookmarks anymore
+                # desync everything
+                deletions = set(self.bookmarks)
             else:
                 log.error("Unable to retrieve PEP-native bookmarks: %s", exc)
                 raise
+
+        if deletions:
+            # python set() -> <Items> XML tag
+            _deletions = Items()
+            for room in deletions:
+                item = Item()
+                item["id"] = room
+                item["conference"] = self.bookmarks[room] # this isn't actually necessary, but here for completeness
+                _deletions.append(item)
+            deletions = _deletions; del _deletions
+
+            await self._delete_bookmarks(deletions)
+
 
     async def add(self, muc_jid, nick=None, name=None, autojoin=True, password=None):
         """
@@ -194,6 +229,9 @@ class XEP_0402(slixmpp.plugins.xep_0402.XEP_0402):
         name - the local name you have for this room e.g. "Jabber Heads"
         nick - the nickname you will have in this room (when messaging in a MUC you are room@conference.jabber.org/nick)
         password - if the room is password-protected, this is the password
+
+        The server should reflect this back to us once it accepts it, and when
+        that happens, if config["autojoin"] is on, this will cause a join.
         """
         muc_jid = JID(muc_jid)
 
@@ -207,7 +245,7 @@ class XEP_0402(slixmpp.plugins.xep_0402.XEP_0402):
 
         log.info("Adding bookmark %s: %s", muc_jid, item)
         await self.xmpp["xep_0060"].publish(
-            self.xmpp.boundjid.bare,
+            self.jid,
             slixmpp.plugins.xep_0402.stanza.NS,
             id=muc_jid,
             payload=item["conference"].xml,
@@ -217,17 +255,37 @@ class XEP_0402(slixmpp.plugins.xep_0402.XEP_0402):
         """
         Remove a bookmark.
 
-        If autojoin is set this will also leave the room.
+        The server should reflect this back to us once it accepts it, and when
+        that happens, if config["autojoin"] is on, this will cause a leave.
         """
         muc_jid = str(JID(muc_jid))  # normalize case how XMPP wants
 
         log.info("Retracting bookmark %s", muc_jid)
         await self.xmpp["xep_0060"].retract(
-            self.xmpp.boundjid.bare,
+            self.jid,
             slixmpp.plugins.xep_0402.stanza.NS,
             id=muc_jid,
             notify=True,
         )
+
+    def register(self, jid):
+        """
+            Track bookmarks of a specific user.
+            This is usually only allowed if we are a component; then we can impersonate any JID under our domain.
+            If used on a jid that's not part of our component no error will be raised
+            but nothing will happen.
+        """
+        if self.jid != self.xmpp.boundjid.bare:
+            raise ValueError("This is already a child plugin. It cannot track children.")
+        if not self.xmpp["xep_0045"].multi_from:
+            log.warn(f"Registering XEP-0402 to track bookmarks of {jid} will probably messily join all  because XEP-0045 multi_from is disabled.")
+        assert str(jid) == str(JID(jid).bare), "You must pass a bare JID"
+        # the way this works is
+        if jid not in self._children:
+            cls = type(self)
+            self._children[jid] = cls(self.xmpp, {**self.config, jid: jid})
+            self._children[jid].plugin_init()
+
 
 
 # NB: this *prevents* slixmpp.plugins.xep_0402 from registering itself
