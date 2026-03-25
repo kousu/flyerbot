@@ -1,15 +1,11 @@
 import os
-import io
 import json
 import logging
-import secrets
 from typing import Optional, FrozenSet
 
-import aiohttp
 import omemo.storage
 import slixmpp.plugins
 import slixmpp_omemo
-from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
 log = logging.getLogger(__name__)
 
@@ -74,7 +70,7 @@ class XEP_0384(slixmpp_omemo.XEP_0384):
 
     class Storage(omemo.storage.Storage):
         """
-        OMEMO key storage using JSON files in XDG_STATE_HOME.
+        OMEMO key storage using a simple tree of JSON files.
         """
 
         def __init__(self, storage_path, disable_cache=False):
