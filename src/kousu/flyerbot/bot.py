@@ -40,12 +40,16 @@ class FlyerBot(slixmpp.ClientXMPP):
     - XEP-0484 (FAST) for SASL FAST authentication
     """
 
-    def __init__(self, jid, password=None):
+    def __init__(self, jid, password=None, storage=None):
         super().__init__(jid, password)
 
         # TODO: sanitize jid to be filename safe
 
-        state = xdg.BaseDirectory.save_data_path("flyerbot", jid)
+        if not storage:
+            storage = xdg.BaseDirectory.save_data_path("flyerbot", jid)
+
+        omemo_storage = os.path.join(storage, "omemo")
+        # fast_storage = os.path.join(storage, "fast-token.json")
 
         # these two semaphores nest:
         # the first is the outer one which provides backpressure to callers
@@ -75,12 +79,13 @@ class FlyerBot(slixmpp.ClientXMPP):
         )  # , add {'autojoin': False, 'maxstanzas': 0} as a second argument to not sync bookmarks module=slixmpp_bookmarks)
 
         # OMEMO (encrypted messaging)
-        self.register_plugin("xep_0384", {"storage": os.path.join(state, "omemo")})
-        self.register_plugin("xep_0454")
+        if omemo_storage:
+            self.register_plugin("xep_0384", {"storage": omemo_storage})
+            self.register_plugin("xep_0454") # encrypted file sharing; technically can be used separately but why would you?
 
         # FAST (SASL FAST authentication)
         # self.register_plugin(
-        # "xep_0484", {"storage": os.path.join(state, "fast-token.json")}
+        # "xep_0484", {"storage": fast_storage)}
         # )
 
         # Event handlers
@@ -132,7 +137,7 @@ class FlyerBot(slixmpp.ClientXMPP):
 
         # decrypt OMEMO
         omemo_peer = None
-        if self["xep_0384"].is_encrypted(msg):
+        if self["xep_0384"] and self["xep_0384"].is_encrypted(msg):
             msg, omemo_peer = await self["xep_0384"].decrypt_message(msg)
             # sender_jid = omemo_peer.bare_jid
             # TODO: should we use omemo_peer.bare_jid instead of msg['from'].bare?
@@ -341,6 +346,10 @@ class FlyerBot(slixmpp.ClientXMPP):
         """
         Send a message possibly (hopefully) with OMEMO.
         """
+
+        if encrypt and not self["xep_0384"]:
+            log.warn("Encryption requested but OMEMO is disabled.")
+            encrypt = False
 
         if not encrypt:
             msg.send()
