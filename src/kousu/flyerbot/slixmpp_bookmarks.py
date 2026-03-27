@@ -84,7 +84,15 @@ class XEP_0402(slixmpp.plugins.xep_0402.XEP_0402):
             plugin.plugin_end()
 
     async def _on_start(self, event):
-        await self._sync_bookmarks()
+
+        def maintain_sync():
+            "Attempt to stay connected"
+            # -> better: only trigger this
+            while True:
+                await self._sync_bookmarks()
+                await asyncio.sleep(30)
+        task = asyncio.create_task(await self.maintain_sync())
+        self.xmpp.add_event_handler('session_end', lambda _: task.cancel(), disposable=True)
 
     async def _on_groupchat_presence(self, presence):
         """
