@@ -80,14 +80,17 @@ async def amain():
         login = asyncio.create_task(bot.wait_until("session_start", timeout=10))
 
         # async def connection_failed(event):
-           # print(f"Unable to connect to {bot.boundjid.bare}'s server.")
-           # login.cancel()
+        # print(f"Unable to connect to {bot.boundjid.bare}'s server.")
+        # login.cancel()
         async def failed_auth(event):
-           print(f"Unable to login as '{bot.boundjid.bare}'. Check your password.", flush=True)
-           login.cancel()
+            print(
+                f"Unable to login as '{bot.boundjid.bare}'. Check your password.",
+                flush=True,
+            )
+            login.cancel()
 
         # bot.add_event_handler('connection_failed', connection_failed)
-        bot.add_event_handler('failed_all_auth', failed_auth)
+        bot.add_event_handler("failed_all_auth", failed_auth)
 
         await login
         print(f"Logged in as '{bot.boundjid.bare}'")
