@@ -184,21 +184,26 @@ class XEP_0402(slixmpp.plugins.xep_0402.XEP_0402):
     # I wish
     async def _upsert_bookmarks(self, items: Items | list[Item]):
         for item in items:
-            room = JID(item["id"])
-            # TODO: handle the conference being empty?
             if "conference" not in item:
-                raise TypeError("<item> should have contained a <conference>")
-            self.bookmarks[room] = item["conference"]
-            asyncio.create_task(self._sync_muc(room))
+                raise TypeError(f"<item> {item} should have contained a <conference>")
+
+        async with asyncio.TaskGroup() as tg:
+            for item in items:
+                room = JID(item["id"])
+                self.bookmarks[room] = item["conference"]
+                tg.create_task(self._sync_muc(room))
 
     async def _delete_bookmarks(self, items: Items | list[Item]):
         for item in items:
             room = JID(item["id"])
             if room not in self.bookmarks:
                 raise ValueError(f"{room} was not in our bookmarks cache.")
-            # TODO: handle room not being in bookmarks?
-            del self.bookmarks[room]
-            asyncio.create_task(self._sync_muc(room))
+
+        async with asyncio.TaskGroup() as tg:
+            for item in items:
+                room = JID(item["id"])
+                del self.bookmarks[room]
+                tg.create_task(self._sync_muc(room))
 
     async def _on_bookmarks_changed(self, msg: Message):
         # triggered on both creations/additions
