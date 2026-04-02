@@ -151,6 +151,7 @@ class XEP_0402(slixmpp.plugins.xep_0402.XEP_0402):
         KICKED = 307
         LOST_MEMBERSHIP = 321
         MEMBERS_ONLY = 322
+        SHUTDOWN = 332
         if presence["type"] == "unavailable":
             if {BANNED, KICKED, LOST_MEMBERSHIP, MEMBERS_ONLY} & presence["muc"][
                 "status_codes"
@@ -302,7 +303,7 @@ class XEP_0402(slixmpp.plugins.xep_0402.XEP_0402):
 
             await self._delete_bookmarks(deletions)
 
-    async def add(self, muc_jid, nick=None, name=None, autojoin=True, password=None):
+    async def set(self, muc_jid, nick=None, name=None, autojoin=True, password=None):
         """
         Add/edit a MUC bookmark.
 
@@ -312,7 +313,8 @@ class XEP_0402(slixmpp.plugins.xep_0402.XEP_0402):
         password - if the room is password-protected, this is the password
 
         The server should reflect this back to us once it accepts it, and when
-        that happens, if config["autojoin"] is on, this will cause a join.
+        that happens, if autojoin=True and config["autojoin"] is on, this will
+        cause a join.
         """
         muc_jid = JID(muc_jid)
 
