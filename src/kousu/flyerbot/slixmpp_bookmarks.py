@@ -8,7 +8,6 @@ import asyncio
 import logging
 from random import randint
 from itertools import count
-from contextlib import suppress
 from typing import List
 
 from slixmpp import JID, Message
@@ -47,7 +46,10 @@ class XEP_0402(slixmpp.plugins.xep_0402.XEP_0402):
         "maxstanzas": None,  # If autojoin, max number of stanzas to return from history.
         "seconds": None,  # If autojoin, fetch history until that many seconds in the past.
         "since": None,  # If autojoin, fetch history since that timestamp.
-        "timeout": 300,  # If autojoin, timeout after which a TimeoutError is raised. None means no timeout.
+        "join_delay": (
+            20,
+            60,
+        ),  # If autojoin, the delay between failed join attempts. Give a single int to use a fixed delay for all rooms, or a pair (low,high) to pick a random delay on each attempt.
     }
 
     bookmarks: dict[JID, Bookmark]
@@ -62,6 +64,10 @@ class XEP_0402(slixmpp.plugins.xep_0402.XEP_0402):
             )
 
         super().plugin_init()
+
+        self._joining: dict[JID, asyncio.Task] = (
+            {}
+        )  # only one active attempt to join per room at a time
 
         self.xmpp.add_event_handler("session_start", self._on_start)
         self.xmpp.add_event_handler("session_end", self._on_end)
@@ -91,35 +97,82 @@ class XEP_0402(slixmpp.plugins.xep_0402.XEP_0402):
             plugin.plugin_end()
 
     async def _on_start(self, event):
-        self._maintain = asyncio.create_task(self.maintain_presence())
-
         await self._sync_bookmarks()
 
     async def _on_end(self, event):
-        # close the TaskGroup
-        self._maintain.cancel()
-        try:
-            await self._maintain
-        except asyncio.CancelledError:
-            # good
-            pass
+        tasks = self._joining.values()
+        for task in tasks:
+            task.cancel()
+        await asyncio.gather(*tasks)
+        self._joining = {}
 
-    async def maintain_presence(self):
-        "Sync room state with bookmarks periodically, as a backstop"
+    async def _join(self, muc_jid):
+        async def join():
+            for attempt in count(1):
+                if not self.config["autojoin"]:
+                    return
 
-        async def shhh(task):
-            with suppress(TimeoutError):
-                return await task
+                bookmark = await self.get(muc_jid)
+                if not bookmark["autojoin"]:
+                    # the bookmark changed to "off" while we were waiting
+                    return
 
-        while True:
-            async with asyncio.TaskGroup() as tg:
-                for bookmark in self.bookmarks:
-                    tg.create_task(shhh(self._apply_bookmark(bookmark)))
+                nick = bookmark["nick"] or self.xmpp.boundjid.user
+                try:
+                    log.info("Joining %s as %s", muc_jid, nick)
+                    await self.xmpp["xep_0045"].join_muc_wait(
+                        muc_jid,
+                        nick,
+                        password=bookmark["password"] or None,
+                        maxchars=self.config["maxchars"],
+                        maxstanzas=self.config["maxstanzas"],
+                        seconds=self.config["seconds"],
+                        since=self.config["since"],
+                        timeout=15,
+                    )
+                except TimeoutError:
+                    delay = self._get_join_delay()
+                    log.warn("Timed out joining %s; retrying in %ds", muc_jid, delay)
 
-            await asyncio.sleep(30)
+                    await asyncio.sleep(delay)
+                    # exponential backoff ??
+                    # delay += min(10 * (1 + 0.5) ** attempt, 300)
+                else:
+                    log.info("%s: joined", muc_jid)
+                    del self._joining[muc_jid]
+                    return
+
+        if muc_jid in self._joining:
+            log.warn("%s already joining %s", self.xmpp.boundjid, muc_jid)
+            return
+        self._joining[muc_jid] = asyncio.create_task(join())
+
+    def _get_join_delay(self):
+        delay = self.config["join_delay"]
+        if isinstance(delay, (tuple, list)) and len(delay) == 2:
+            delay = randint(delay[0], delay[1])
+        if not isinstance(delay, int):
+            # XXX it would be better to catch this earlier
+            raise TypeError("join_delay should be an int or (low, high)")
+        return delay
+
+    async def _leave(self, muc_jid):
+        if muc_jid in self._joining:
+            self._joining[muc_jid].cancel()
+            del self._joining[muc_jid]
+
+        if self.xmpp["xep_0045"].jid_in_room(muc_jid, self.xmpp.boundjid):
+            # XXX get_our_jid_in_room isn't reliable (it can throw KeyError) unless guarded like this
+            nick = JID(self.xmpp["xep_0045"].get_our_jid_in_room(muc_jid)).resource
+
+            log.info("Leaving %s as %s", muc_jid, nick)
+            self.xmpp["xep_0045"].leave_muc(muc_jid, nick)
+            log.info("%s: left", muc_jid)
 
     async def _on_groupchat_presence(self, presence):
         """ """
+
+        muc_jid = presence["from"].bare
 
         if 110 not in presence["muc"]["status_codes"]:
             # 110 = "Self Presence", and it specifically means _for this device_.
@@ -137,7 +190,6 @@ class XEP_0402(slixmpp.plugins.xep_0402.XEP_0402):
 
             # i.e. to approve and unlock the new room the bare minimum is just
             # to re-send the default config back.
-            muc_jid = presence["from"].bare
             form = await self.xmpp["xep_0045"].get_room_config(muc_jid)
             # TODO:
             # - set persistent?
@@ -146,6 +198,8 @@ class XEP_0402(slixmpp.plugins.xep_0402.XEP_0402):
             await self.xmpp["xep_0045"].set_room_config(
                 muc_jid, config=form, ifrom=presence["to"]
             )
+
+        bookmark = await self.get(muc_jid)
 
         BANNED = 301
         KICKED = 307
@@ -162,75 +216,37 @@ class XEP_0402(slixmpp.plugins.xep_0402.XEP_0402):
                     muc_jid,
                     presence["muc"]["status_codes"],
                 )
-                if self.config["autojoin"]:
+                if self.config["autojoin"] and muc_jid in self.bookmarks:
                     # sync bookmark with this information so we don't uselessly rejoin
-                    current = self.get(presence["from"].bare)
-                    self.add(
+                    self.set(
                         presence["from"].bare,
-                        current["nick"],
-                        current["name"],
+                        bookmark["nick"],
+                        bookmark["name"],
                         autojoin=False,
-                        password=current["password"],
+                        password=bookmark["password"],
                     )
+            else:
+                delay = self._get_join_delay()
+                log.info(
+                    "Lost connection to %s, attempting rejoin in %ds.", muc_jid, delay
+                )
+                await asyncio.sleep(delay)
+
+                # This causes some noise; possibly it's a bug in prosody: the first rejoin
+                # attempt at least if rejoining a room on an external component,
+                # can triggers a duplicate <presence type="unavailable">
+                await self._join(muc_jid)
 
     async def _apply_bookmark(self, muc_jid):
-        """
-        Helper: join/leave a single MUC according to the bookmarks state:
-        - if config["autojoin"] and bookmarks["muc_jid"]["autojoin"],
-        muc_jid is entered;
-        - if config["autojoin"] and bookmarks[muc_jid]["autojoin"].
-        This only tries *once* and *might* silently fail.
-
-        (this doesn't take a bookmark because a bookmark doesn't its own name)
-        """
-        # TODO: put a per-muc lock around this?
         if not self.config["autojoin"]:
             return
 
-        bookmark = self.bookmarks.get(muc_jid)
-
-        # XXX I am DISSATISFIED with the "we are present in a room" API available
-        # this seems to be the most official
-        present = self.xmpp["xep_0045"].jid_in_room(muc_jid, self.xmpp.boundjid)
-
-        if bookmark is None or not bookmark["autojoin"]:
-            if present:
-                # leave
-                nick = JID(self.xmpp["xep_0045"].get_our_jid_in_room(muc_jid)).resource
-
-                log.info("Leaving %s as %s", muc_jid, nick)
-                self.xmpp["xep_0045"].leave_muc(muc_jid, nick)
-                log.info("%s: left", muc_jid)
+        bookmark = await self.get(muc_jid)
+        if bookmark and bookmark["autojoin"]:
+            await self._join(muc_jid)
         else:
-            if not present:
-                # join
-                try:
-                    nick = bookmark["nick"] or self.xmpp.boundjid.user
-                    log.info("Joining %s as %s", muc_jid, nick)
-                    await self.xmpp["xep_0045"].join_muc_wait(
-                        muc_jid,
-                        nick,
-                        password=bookmark["password"] or None,
-                        maxchars=self.config["maxchars"],
-                        maxstanzas=self.config["maxstanzas"],
-                        seconds=self.config["seconds"],
-                        since=self.config["since"],
-                        timeout=5,  # self.config["timeout"],
-                    )
-                except TimeoutError:
-                    log.warn(
-                        "Timed out joining %s",
-                        muc_jid,
-                    )
-                    # exponential backoff ?? with some jitter to avoid thundering-herds
-                    # await asyncio.sleep(
-                    #        5
-                    # min(10 * (1 + 0.5) ** attempt, 600) + randint(20, 60)
-                    # )
-                else:
-                    log.info("%s: joined", muc_jid)
+            await self._leave(muc_jid)
 
-    # I wish
     async def _upsert_bookmarks(self, items: Items | list[Item]):
         for item in items:
             if "conference" not in item:
