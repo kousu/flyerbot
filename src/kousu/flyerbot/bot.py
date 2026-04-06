@@ -122,7 +122,7 @@ class FlyerBot(slixmpp.ClientXMPP):
             # itself, but it's a fair assumption because what else does a room do
             # except relay messages and give scrollback history of messages?
             #
-            print("skipping scrollback")
+            # print("skipping scrollback")
             return
 
         if (
