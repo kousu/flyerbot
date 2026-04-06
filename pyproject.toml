@@ -23,3 +23,8 @@ dependencies = [
 
 [project.scripts]
 flyerbot = "kousu.flyerbot.__main__:main"
+
+[dependency-groups]
+dev = [
+    "black>=26.3.1",
+]
