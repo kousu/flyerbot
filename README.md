@@ -1,3 +1,7 @@
+> [!WARNING]
+> Migrated to https://codeberg.org/kousu/flyerbot
+
+
 # Flyer OCR Bot 🐗
 
 An XMPP bot that converts flyers to importable and shareable .ics calendar events.
